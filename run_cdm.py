@@ -165,6 +165,7 @@ def run_next_interval_token():
         logging.error(f"Error inserting cdm_run_interval: {e}")
         return False
     
+    # Close the session
     session.shutdown()
     
     if os.getenv('DRY_RUN') != '1':
@@ -183,10 +184,12 @@ def run_next_interval_token():
         status = "SUCCESS"
         logging.info("DRY RUN Mode")
     
+    # Reconnect to Astra DB
+    session = connect_to_astra()
     if status == "SUCCESS":
         try:
             elapsed_time = int((datetime.now() - start_time).total_seconds())
-            # logging.info(f"Updating cdm_run_interval for run_id: {run_id}, start_time: {start_time}, end_time: {datetime.now()}, status: {status}, elapsed_time: {elapsed_time}")
+            logging.info(f"Updating cdm_run_interval for run_id: {run_id}, start_time: {start_time}, end_time: {datetime.now()}, status: {status}, elapsed_time: {elapsed_time}")
             session.execute("""UPDATE cdm_run_interval SET end_time = %s, 
                             status = %s, elapsed_time = %s WHERE run_id = %s and start_time = %s""",
                             [datetime.now(), status, elapsed_time, run_id, start_time])
