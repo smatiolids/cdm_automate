@@ -1,2 +1,4 @@
 cdm_automate/
 .env
+logs
+cdm_automate_logs

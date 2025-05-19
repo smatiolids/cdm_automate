@@ -89,8 +89,12 @@ def connect_to_astra():
 
     # Ensure secure connect bundle exists
     if not Path(secure_bundle_path).exists():
-        raise FileNotFoundError(
-            f"Secure connect bundle not found at: {secure_bundle_path}")
+        raise FileNotFoundError(f"Secure connect bundle not found at: {secure_bundle_path}")
+
+    # Suppress Cassandra driver warnings
+    logging.getLogger('cassandra').setLevel(logging.ERROR)
+    logging.getLogger('cassandra.connection').setLevel(logging.ERROR)
+    logging.getLogger('cassandra.protocol').setLevel(logging.ERROR)
 
     # Create auth provider
     auth_provider = PlainTextAuthProvider(client_id, client_secret)
