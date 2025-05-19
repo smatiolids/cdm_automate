@@ -6,8 +6,42 @@ from dotenv import load_dotenv
 from datetime import datetime
 import pytz
 import subprocess
+import logging
+from logging.handlers import RotatingFileHandler
 
 load_dotenv(override=True)
+
+# Configure logging
+def setup_logging():
+    # Create logs directory if it doesn't exist
+    os.makedirs('logs', exist_ok=True)
+    
+    # Get run ID from environment or use timestamp
+    run_id = os.getenv('RUN_ID', datetime.now().strftime('%Y%m%d%H%M%S'))
+    
+    # Configure logging format
+    log_format = '%(asctime)s - %(levelname)s - %(message)s'
+    formatter = logging.Formatter(log_format)
+    
+    # Create logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    
+    # Create file handler
+    log_file = f'logs/cdm_{run_id}.log'
+    file_handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    # Create console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
+    logging.info(f"=== CDM Run Started at {datetime.now()} ===")
+    logging.info(f"Logging to file: {log_file}")
+    
+    return logger
 
 PARAMETERS = {
     'start_token': -9223372036854775808,
@@ -16,23 +50,23 @@ PARAMETERS = {
     'last_end_token': -9223372036854775808,
     'num_partitions': 5000,
     'read_rate_limit': 40000,
-    'write_rate_limit': 40000
+    'write_rate_limit': 120000
 }
 
-CDM_COMMAND = """./spark-3.5.3-bin-hadoop3-scala2.13/bin/spark-submit 
-  --properties-file cdm-spark.properties 
-  --conf spark.executor.extraJavaOptions='-Dlog4j.configurationFile=log4j2.properties' 
-  --conf spark.driver.extraJavaOptions='-Dlog4j.configurationFile=log4j2.properties' 
-  --driver-memory 25G 
-  --executor-memory 25G 
-  --num-executors 32 
-  --conf spark.cdm.filter.cassandra.partition.min='<start_token>' 
-  --conf spark.cdm.filter.cassandra.partition.max='<end_token>' 
-  --conf spark.cdm.perfops.numParts='<num_partitions>' 
-  --conf spark.cdm.perfops.ratelimit.origin='<read_rate_limit>' 
-  --conf spark.cdm.perfops.ratelimit.target='<write_rate_limit>' 
-  --conf spark.cdm.perfops.consistency.read='LOCAL_ONE'
-  --master "local[*]" 
+CDM_COMMAND = """./spark-3.5.3-bin-hadoop3-scala2.13/bin/spark-submit \
+  --properties-file cdm-spark.properties \
+  --conf spark.executor.extraJavaOptions='-Dlog4j.configurationFile=log4j2.properties' \
+  --conf spark.driver.extraJavaOptions='-Dlog4j.configurationFile=log4j2.properties' \
+  --driver-memory 25G \
+  --executor-memory 25G \
+  --num-executors 32 \
+  --conf spark.cdm.filter.cassandra.partition.min='<start_token>' \
+  --conf spark.cdm.filter.cassandra.partition.max='<end_token>' \
+  --conf spark.cdm.perfops.numParts='<num_partitions>' \
+  --conf spark.cdm.perfops.ratelimit.origin='<read_rate_limit>' \
+  --conf spark.cdm.perfops.ratelimit.target='<write_rate_limit>' \
+  --conf spark.cdm.perfops.consistency.read='LOCAL_ONE' \
+  --master "local[*]" \
   --class com.datastax.cdm.job.Migrate cassandra-data-migrator-5.2.3-SNAPSHOT_getrak.jar"""
 
 
@@ -71,7 +105,7 @@ def connect_to_astra():
 
     # Create session
     session = cluster.connect(keyspace)
-    print(f"Successfully connected to keyspace: {keyspace}")
+    logging.info(f"Successfully connected to keyspace: {keyspace}")
     return session
 
 def update_parameters(session):
@@ -80,7 +114,7 @@ def update_parameters(session):
         param_id = row.parameter_id
         param_value = row.parameter_value
         PARAMETERS[param_id] = int(param_value)    
-    print("Updated parameters:")
+    logging.info("Updated parameters:")
     # for key, value in PARAMETERS.items():
     #     print(f"{key}: {value}")  
 
@@ -88,15 +122,15 @@ def run_next_interval_token():
     # for each interval get the current parameters
     run_id = os.getenv('RUN_ID')
     session = connect_to_astra()
-    print("Connected to Astra DB")
-    print("Getting parameters from Astra DB")
+    logging.info("Connected to Astra DB")
+    logging.info("Getting parameters from Astra DB")
     update_parameters(session)
 
     if PARAMETERS['last_end_token'] > PARAMETERS['end_token']:
-        print("#"*50)
-        print("Start token is greater than the end token")
-        print("FINISHED")
-        print("#"*50)
+        logging.info("#"*50)
+        logging.info("Start token is greater than the end token")
+        logging.info("FINISHED")
+        logging.info("#"*50)
         return False
     
     # Get current hour in UTC-03:00 timezone
@@ -104,7 +138,7 @@ def run_next_interval_token():
     current_time = datetime.now(brazil_tz)
     current_round_hour = f"{current_time.hour:02d}00"
     read_rate_limit = PARAMETERS.get(f"read_rate_limit_{current_round_hour}",40000)
-    print(f"Current round hour: {current_round_hour} - Using read rate limit: {read_rate_limit}")
+    logging.info(f"Current round hour: {current_round_hour} - Using read rate limit: {read_rate_limit}")
     
     end_token = PARAMETERS['last_end_token'] + PARAMETERS['token_increment']
     
@@ -114,64 +148,53 @@ def run_next_interval_token():
     cdm_command = cdm_command.replace('<write_rate_limit>', str(PARAMETERS['write_rate_limit']))
     cdm_command = cdm_command.replace('<read_rate_limit>', str(read_rate_limit))
     
-    print(f"CDM command: {cdm_command}")
+    logging.info(f"CDM command: {cdm_command}")
     
     status = "RUNNING"
-    start_time = datetime.now()
+    start_time = datetime.now().isoformat()
     try:
-        print(f"Inserting cdm_run_interval for run_id: {run_id}, start_time: {start_time}, last_end_token: {PARAMETERS['last_end_token']}, end_token: {end_token}, token_increment: {PARAMETERS['token_increment']}, read_rate_limit: {read_rate_limit}, write_rate_limit: {PARAMETERS['write_rate_limit']}, status: {status}")
-        session.execute("""INSERT INTO cdm_run_interval (
-                        run_id, start_time, 
+        logging.info(f"Inserting cdm_run_interval for run_id: {run_id}, start_time: {start_time}, last_end_token: {PARAMETERS['last_end_token']}, end_token: {end_token}, token_increment: {PARAMETERS['token_increment']}, read_rate_limit: {read_rate_limit}, write_rate_limit: {PARAMETERS['write_rate_limit']}, status: {status}")
+        session.execute("""INSERT INTO cdm_run_interval (run_id, start_time, 
                         start_token, end_token, token_increment, 
                         read_rate_limit, write_rate_limit, status) 
-                    VALUES (%s, 
-                            %s, 
-                            %s, 
-                            %s, 
-                            %s, 
-                            %s, 
-                            %s, 
-                            %s)""",
-                    [run_id, 
-                     start_time, 
-                     PARAMETERS['last_end_token'], 
-                     end_token, 
-                     PARAMETERS['token_increment'], 
-                     read_rate_limit, 
-                     PARAMETERS['write_rate_limit'], 
-                     status])
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                    [run_id, start_time, 
+                     PARAMETERS['last_end_token'], end_token, PARAMETERS['token_increment'], 
+                     read_rate_limit, PARAMETERS['write_rate_limit'], status])
     except Exception as e:
-        print(f"Error inserting cdm_run_interval: {e}")
+        logging.error(f"Error inserting cdm_run_interval: {e}")
         return False
     
     session.shutdown()
     
     if os.getenv('DRY_RUN') != '1':
-        print("Running CDM Job")
-        print("Start time: ", datetime.now())
+        logging.info("Running CDM Job")
+        logging.info(f"Start time: {datetime.now()}")
+        log_filename = f"cdm_job_{run_id}_{PARAMETERS['last_end_token']}_{end_token}.log"
         try:
-            subprocess.run(cdm_command, shell=True)
+            with open(log_filename, 'w') as log_file:
+                subprocess.run(cdm_command, shell=True, stdout=log_file, stderr=subprocess.STDOUT)
             status = "SUCCESS"
         except Exception as e:
             status = "FAILED"
-            print(f"Error running CDM Job: {e}")
-        print("End time: ", datetime.now())
+            logging.error(f"Error running CDM Job: {e}")
+        logging.info(f"End time: {datetime.now()}")
     else:
         status = "SUCCESS"
-        print("DRY RUN Mode")
-        
-    session = connect_to_astra()
-
+        logging.info("DRY RUN Mode")
+    
     if status == "SUCCESS":
         try:
             elapsed_time = int((datetime.now() - start_time).total_seconds())
-            print(f"Updating cdm_run_interval for run_id: {run_id}, start_time: {start_time}, end_time: {datetime.now()}, status: {status}, elapsed_time: {elapsed_time}")
+            logging.info(f"Updating cdm_run_interval for run_id: {run_id}, start_time: {start_time}, end_time: {datetime.now()}, status: {status}, elapsed_time: {elapsed_time}")
             session.execute("""UPDATE cdm_run_interval SET end_time = %s, 
                             status = %s, elapsed_time = %s WHERE run_id = %s and start_time = %s""",
                             [datetime.now(), status, elapsed_time, run_id, start_time])
+            estimate_time_to_finish(PARAMETERS['start_token'], PARAMETERS['end_token'], PARAMETERS['last_end_token'], end_token, elapsed_time)
         except Exception as e:
-            print(f"Error updating cdm_run_interval: {e}")
+            logging.error(f"Error updating cdm_run_interval: {e}")
             return False
+        
         # update the last_end_token
         try:
             session.execute("""UPDATE cdm_run_parameters 
@@ -179,7 +202,7 @@ def run_next_interval_token():
                             WHERE parameter_id = 'last_end_token'""",
                             [str(end_token)])
         except Exception as e:
-            print(f"Error updating cdm_run_parameters: {e}")
+            logging.error(f"Error updating cdm_run_parameters: {e}")
             return False
     else:
         try:
@@ -187,15 +210,35 @@ def run_next_interval_token():
             session.execute("""UPDATE cdm_run_interval SET status = %s, elapsed_time = %s WHERE run_id = %s and start_time = %s""",
                             [status, elapsed_time, run_id, start_time])
         except Exception as e:
-            print(f"Error updating cdm_run_interval: {e}")
+            logging.error(f"Error updating cdm_run_interval: {e}")
             return False
+    
     session.shutdown()
     return True
 
+def estimate_time_to_finish(start_token, end_token, range_start_token, range_end_token, elapsed_time):
+    complete_loaded_percentage = ((range_end_token - start_token) / (end_token - start_token)) * 100
+    logging.info(f"Loaded {complete_loaded_percentage}% of the token range")
+    
+    loaded_percentage = ((range_end_token - range_start_token) / (end_token - start_token)) * 100
+    not_loaded_percentage = 100 - loaded_percentage
+    estimated_total_time_seconds = (elapsed_time / loaded_percentage) * 100
+    # Calculate the remaining time in seconds
+    remaining_time_seconds = estimated_total_time_seconds - elapsed_time
+    # Convert remaining time to hours
+    remaining_time_hours = remaining_time_seconds / 3600
+    logging.info(f"Last run loaded  {loaded_percentage}% of the token range")
+    logging.info(f"Estimated hours to complete the not loaded percentage: {remaining_time_hours:.2f} hours")
+
 if __name__ == "__main__":
     try:
+        # Setup logging first
+        logger = setup_logging()
+        
         while True:
             if not run_next_interval_token():
                 break
+                
+        logging.info(f"=== CDM Run Completed at {datetime.now()} ===")
     except Exception as e:
-        print(f"Error connecting to Astra DB: {str(e)}")
+        logging.error(f"Error connecting to Astra DB: {str(e)}")
