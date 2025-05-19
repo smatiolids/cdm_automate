@@ -14,7 +14,7 @@ load_dotenv(override=True)
 # Configure logging
 def setup_logging():
     # Create logs directory if it doesn't exist
-    os.makedirs('logs', exist_ok=True)
+    os.makedirs('cdm_automate_logs', exist_ok=True)
     
     # Get run ID from environment or use timestamp
     run_id = os.getenv('RUN_ID', datetime.now().strftime('%Y%m%d%H%M%S'))
@@ -28,7 +28,7 @@ def setup_logging():
     logger.setLevel(logging.INFO)
     
     # Create file handler
-    log_file = f'logs/cdm_{run_id}.log'
+    log_file = f'cdm_automate_logs/cdm_{run_id}.log'
     file_handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -151,7 +151,7 @@ def run_next_interval_token():
     logging.info(f"CDM command: {cdm_command}")
     
     status = "RUNNING"
-    start_time = datetime.now().isoformat()
+    start_time = datetime.now()
     try:
         logging.info(f"Inserting cdm_run_interval for run_id: {run_id}, start_time: {start_time}, last_end_token: {PARAMETERS['last_end_token']}, end_token: {end_token}, token_increment: {PARAMETERS['token_increment']}, read_rate_limit: {read_rate_limit}, write_rate_limit: {PARAMETERS['write_rate_limit']}, status: {status}")
         session.execute("""INSERT INTO cdm_run_interval (run_id, start_time, 
@@ -186,7 +186,7 @@ def run_next_interval_token():
     if status == "SUCCESS":
         try:
             elapsed_time = int((datetime.now() - start_time).total_seconds())
-            logging.info(f"Updating cdm_run_interval for run_id: {run_id}, start_time: {start_time}, end_time: {datetime.now()}, status: {status}, elapsed_time: {elapsed_time}")
+            # logging.info(f"Updating cdm_run_interval for run_id: {run_id}, start_time: {start_time}, end_time: {datetime.now()}, status: {status}, elapsed_time: {elapsed_time}")
             session.execute("""UPDATE cdm_run_interval SET end_time = %s, 
                             status = %s, elapsed_time = %s WHERE run_id = %s and start_time = %s""",
                             [datetime.now(), status, elapsed_time, run_id, start_time])
