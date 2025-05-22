@@ -176,7 +176,7 @@ def run_next_interval_token():
     if os.getenv('DRY_RUN') != '1':
         logging.info("Running CDM Job")
         logging.info(f"Start time: {datetime.now()}")
-        log_filename = f"cdm_job_{run_id}_{PARAMETERS['last_end_token']}_{end_token}.log"
+        log_filename = f"cdm_automate_logs/cdm_job_{run_id}_{PARAMETERS['last_end_token']}_{end_token}.log"
         try:
             with open(log_filename, 'w') as log_file:
                 process = subprocess.Popen(cdm_command, shell=True, stdout=log_file, stderr=subprocess.STDOUT)
@@ -193,6 +193,7 @@ def run_next_interval_token():
                         start = time.time()
                     time.sleep(60)  # Check every 10 seconds
                 process.wait()  # Wait for the final process to complete
+                logging.info(f"Process completed at {time.time()} - PID: {process.pid}")
             status = "SUCCESS"
         except Exception as e:
             status = "FAILED"
