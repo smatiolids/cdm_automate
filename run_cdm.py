@@ -7,6 +7,7 @@ from datetime import datetime
 import pytz
 import subprocess
 import logging
+import time
 from logging.handlers import RotatingFileHandler
 
 load_dotenv(override=True)
@@ -178,7 +179,20 @@ def run_next_interval_token():
         log_filename = f"cdm_job_{run_id}_{PARAMETERS['last_end_token']}_{end_token}.log"
         try:
             with open(log_filename, 'w') as log_file:
-                subprocess.run(cdm_command, shell=True, stdout=log_file, stderr=subprocess.STDOUT)
+                process = subprocess.Popen(cdm_command, shell=True, stdout=log_file, stderr=subprocess.STDOUT)
+                start = time.time()
+                logging.info(f"Process started at {start} - PID: {process.pid}")
+                while process.poll() is None:
+                    if time.time() - start > 3600:  # 1 hour in seconds
+                        logging.warning("Process took more than 1 hour, killing and restarting...")
+                        process.kill()
+                        process.wait()
+                        # Restart the process
+                        process = subprocess.Popen(cdm_command, shell=True, stdout=log_file, stderr=subprocess.STDOUT)
+                        logging.info(f"Process restarted at {time.time()} - New PID: {process.pid}")
+                        start = time.time()
+                    time.sleep(60)  # Check every 10 seconds
+                process.wait()  # Wait for the final process to complete
             status = "SUCCESS"
         except Exception as e:
             status = "FAILED"
