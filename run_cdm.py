@@ -183,6 +183,7 @@ def run_next_interval_token():
                 start = time.time()
                 logging.info(f"Process started at {start} - PID: {process.pid}")
                 while process.poll() is None:
+                    logging.info(f"Process running for {time.time() - start} seconds")
                     if time.time() - start > 3600:  # 1 hour in seconds
                         logging.warning("Process took more than 1 hour, killing and restarting...")
                         process.kill()
@@ -191,7 +192,7 @@ def run_next_interval_token():
                         process = subprocess.Popen(cdm_command, shell=True, stdout=log_file, stderr=subprocess.STDOUT)
                         logging.info(f"Process restarted at {time.time()} - New PID: {process.pid}")
                         start = time.time()
-                    time.sleep(60)  # Check every 10 seconds
+                    time.sleep(30)  # Check every 10 seconds
                 process.wait()  # Wait for the final process to complete
                 logging.info(f"Process completed at {time.time()} - PID: {process.pid}")
             status = "SUCCESS"
