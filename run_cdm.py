@@ -111,7 +111,7 @@ def connect_to_astra():
     # Create session
     session = cluster.connect(keyspace)
     logging.info(f"Successfully connected to keyspace: {keyspace}")
-    return session
+    return session, cluster
 
 def update_parameters(session):
     rows = session.execute("SELECT parameter_id, parameter_value FROM cdm_run_parameters")
@@ -126,7 +126,7 @@ def update_parameters(session):
 def run_next_interval_token():
     # for each interval get the current parameters
     run_id = os.getenv('RUN_ID')
-    session = connect_to_astra()
+    session, cluster = connect_to_astra()
     logging.info("Connected to Astra DB")
     logging.info("Getting parameters from Astra DB")
     update_parameters(session)
@@ -172,40 +172,50 @@ def run_next_interval_token():
     
     # Close the session
     session.shutdown()
+    cluster.shutdown()
     
     if os.getenv('DRY_RUN') != '1':
         logging.info("Running CDM Job")
         logging.info(f"Start time: {datetime.now()}")
         log_filename = f"cdm_automate_logs/cdm_job_{run_id}_{PARAMETERS['last_end_token']}_{end_token}.log"
+        
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(log_filename), exist_ok=True)
+        
+        log_file = None
         try:
-            with open(log_filename, 'w') as log_file:
-                process = subprocess.Popen(cdm_command, shell=True, stdout=log_file, stderr=subprocess.STDOUT)
-                start = time.time()
-                logging.info(f"Process started at {start} - PID: {process.pid}")
-                while process.poll() is None:
-                    logging.info(f"Process running for {time.time() - start} seconds")
-                    if time.time() - start > 3600:  # 1 hour in seconds
-                        logging.warning("Process took more than 1 hour, killing and restarting...")
-                        process.kill()
-                        process.wait()
-                        # Restart the process
-                        process = subprocess.Popen(cdm_command, shell=True, stdout=log_file, stderr=subprocess.STDOUT)
-                        logging.info(f"Process restarted at {time.time()} - New PID: {process.pid}")
-                        start = time.time()
-                    time.sleep(30)  # Check every 10 seconds
-                process.wait()  # Wait for the final process to complete
-                logging.info(f"Process completed at {time.time()} - PID: {process.pid}")
+            log_file = open(log_filename, 'w')
+            process = subprocess.Popen(cdm_command, shell=True, stdout=log_file, stderr=subprocess.STDOUT)
+            start = time.time()
+            logging.info(f"Process started at {start} - PID: {process.pid}")
+            while process.poll() is None:
+                logging.info(f"Process running for {time.time() - start} seconds")
+                if time.time() - start > 3600:  # 1 hour in seconds
+                    logging.warning("Process took more than 1 hour, killing and restarting...")
+                    process.kill()
+                    process.wait()
+                    # Restart the process
+                    process = subprocess.Popen(cdm_command, shell=True, stdout=log_file, stderr=subprocess.STDOUT)
+                    logging.info(f"Process restarted at {time.time()} - New PID: {process.pid}")
+                    start = time.time()
+                time.sleep(30)  # Check every 30 seconds
+            process.wait()  # Wait for the final process to complete
+            logging.info(f"Process completed at {time.time()} - PID: {process.pid}")
             status = "SUCCESS"
         except Exception as e:
             status = "FAILED"
             logging.error(f"Error running CDM Job: {e}")
+        finally:
+            if log_file:
+                log_file.flush()  # Ensure all data is written
+                log_file.close()  # Close the file
         logging.info(f"End time: {datetime.now()}")
     else:
         status = "SUCCESS"
         logging.info("DRY RUN Mode")
     
     # Reconnect to Astra DB
-    session = connect_to_astra()
+    session, cluster = connect_to_astra()
     if status == "SUCCESS":
         try:
             elapsed_time = int((datetime.now() - start_time).total_seconds())
@@ -237,6 +247,7 @@ def run_next_interval_token():
             return False
     
     session.shutdown()
+    cluster.shutdown()
     return True
 
 def estimate_time_to_finish(start_token, end_token, range_start_token, range_end_token, elapsed_time):
